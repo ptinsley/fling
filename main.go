@@ -15,6 +15,11 @@ import (
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
+var (
+	configFile = kingpin.Flag("config", "Configuration file").Required().Short('c').String()
+	version    = "master" //overridden by build system, master as default
+)
+
 /*
 Todo:
 - See if I can get hpcloud/tail to use logrus?
@@ -22,10 +27,6 @@ Todo:
 - config param defaults
 - add signal handler support
 */
-
-var (
-	configFile = kingpin.Flag("config", "Configuration file").Required().Short('c').String()
-)
 
 //FlingConfig - top level structure of json config file
 type FlingConfig struct {
@@ -52,6 +53,7 @@ func init() {
 func main() {
 	log.Info("Initalizing")
 	//Parse command line params
+	kingpin.Version(version)
 	kingpin.Parse()
 
 	var config, err = loadConfig(*configFile)
