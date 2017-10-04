@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -11,13 +10,14 @@ import (
 
 	"cloud.google.com/go/pubsub"
 	"github.com/hpcloud/tail"
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
 /*
 Todo:
-- identify logging library for log level setting capability
+- See if I can get hpcloud/tail to use logrus?
 - lots of error handling
 - config param defaults
 - add signal handler support
@@ -43,13 +43,22 @@ type FlingFile struct {
 	RotateInterval int    `json:"rotate_interval"`
 }
 
+func init() {
+	log.SetFormatter(&log.JSONFormatter{})
+	log.SetOutput(os.Stdout)
+	log.SetLevel(log.WarnLevel)
+}
+
 func main() {
+	log.Info("Initalizing")
 	//Parse command line params
 	kingpin.Parse()
 
 	var config, err = loadConfig(*configFile)
 	if err != nil {
-		fmt.Printf("Error loading config (%s)", err)
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Fatal("Couldn't load config")
 		os.Exit(-1)
 	}
 
@@ -58,6 +67,7 @@ func main() {
 
 	//setup handlers for all of the files to be watched
 	for _, file := range config.Files {
+
 		handleFile(file, messages)
 	}
 
@@ -72,38 +82,60 @@ func main() {
 
 func loadConfig(path string) (FlingConfig, error) {
 	var config FlingConfig
-	configString, err := ioutil.ReadFile(path)
+	configString, readError := ioutil.ReadFile(path)
 
-	if err != nil {
-		return config, err
+	if readError != nil {
+		return config, readError
 	}
 
-	json.Unmarshal(configString, &config)
+	parseError := json.Unmarshal(configString, &config)
 
-	return config, nil
+	return config, parseError
 }
 
 func handleFile(file FlingFile, messages chan []byte) {
+	log.WithFields(log.Fields{
+		"path": file.Path,
+	}).Info("Adding tail for file")
 	go follow(file.Path, messages, file.IsJSON)
-	fmt.Printf("%s, %s every %d\n", file.Path, file.RotateCommand, file.RotateInterval)
+
 	if file.RotateInterval > 0 && file.RotateCommand != "" {
+		log.WithFields(log.Fields{
+			"path": file.Path,
+		}).Info("Rotate settings detected, adding rotate worker")
 		go rotate(file.Path, file.RotateCommand, file.RotateInterval)
 	}
 
 }
 
 func follow(path string, messages chan []byte, isJSON bool) {
-	t, err := tail.TailFile(path, tail.Config{Follow: true, ReOpen: true, Poll: true})
+	t, tailErr := tail.TailFile(path, tail.Config{Follow: true, ReOpen: true, Poll: true})
 
-	if err != nil {
-		fmt.Println("it borked!")
+	if tailErr != nil {
+		log.WithFields(log.Fields{
+			"path":  path,
+			"error": tailErr,
+		}).Error("Couldn't tail file")
 	}
 
 	for line := range t.Lines {
 		var logEntry map[string]interface{}
 
+		log.WithFields(log.Fields{
+			"path": path,
+			"line": line.Text,
+		}).Debug("Processing log line")
+
 		if isJSON {
-			json.Unmarshal([]byte(line.Text), &logEntry)
+			unmarshalErr := json.Unmarshal([]byte(line.Text), &logEntry)
+			if unmarshalErr != nil {
+				log.WithFields(log.Fields{
+					"message": line.Text,
+					"error":   unmarshalErr,
+				}).Error("Couldn't parse JSON log line")
+
+				continue
+			}
 		} else {
 			logEntry = make(map[string]interface{})
 			logEntry["message"] = line.Text
@@ -112,10 +144,13 @@ func follow(path string, messages chan []byte, isJSON bool) {
 		//FIXME: Inject other pertinent context info
 		logEntry["fling.source"] = path
 
-		//fmt.Printf("sending (%s) into channel\n", line.Text)
-		eventJSON, err := json.Marshal(logEntry)
-		if err != nil {
+		eventJSON, marshalErr := json.Marshal(logEntry)
+		if marshalErr != nil {
+			log.WithFields(log.Fields{
+				"error": marshalErr,
+			}).Error("Couldn't create JSON")
 
+			continue
 		}
 		messages <- eventJSON
 	}
@@ -123,15 +158,40 @@ func follow(path string, messages chan []byte, isJSON bool) {
 
 func rotate(path string, command string, interval int) {
 	for {
-		fmt.Printf("sleeping %d seconds\n", interval)
+		log.WithFields(log.Fields{
+			"seconds": interval,
+			"path":    path,
+		}).Info("Sleeping before rotate")
+
 		time.Sleep(time.Duration(interval) * time.Second)
 
-		fmt.Printf("Renaming %s\n", path)
-		err := os.Rename(path, path+".old")
-		if err == nil {
-			exec.Command("sh", "-c", command).Output()
+		renameErr := os.Rename(path, path+".old")
+		if renameErr != nil {
+			log.WithFields(log.Fields{
+				"error": interval,
+				"path":  path,
+			}).Error("Unable to move log file in rotation")
+
+			continue
+		} else {
+			log.WithFields(log.Fields{
+				"path": path,
+			}).Info("Moved log file")
 		}
 
+		_, cmdError := exec.Command("sh", "-c", command).Output()
+		if cmdError != nil {
+			log.WithFields(log.Fields{
+				"error":   cmdError,
+				"path":    path,
+				"command": command,
+			}).Error("Rotate command failed")
+		} else {
+			log.WithFields(log.Fields{
+				"path":    path,
+				"command": command,
+			}).Info("Rotation command successful")
+		}
 	}
 }
 
@@ -152,16 +212,19 @@ func processMessages(
 
 	for {
 		message := <-messages
-		//fmt.Printf("received: %s\n", message)
 		result := topic.Publish(ctx, &pubsub.Message{
 			Data: message,
 		})
 
 		id, err := result.Get(ctx)
 		if err != nil {
-			fmt.Printf("error publishing %s\n", err)
+			log.WithFields(log.Fields{
+				"error": err,
+			}).Error("Failed to publish message")
 		} else {
-			fmt.Printf("published with ID: %s\n", id)
+			log.WithFields(log.Fields{
+				"id": id,
+			}).Debug("Published Message")
 		}
 
 	}

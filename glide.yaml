@@ -1,0 +1,21 @@
+package: .
+import:
+- package: cloud.google.com/go
+  version: ^0.15.0
+  subpackages:
+  - pubsub
+- package: github.com/hpcloud/tail
+  version: ^1.0.0
+- package: google.golang.org/api
+  subpackages:
+  - option
+- package: gopkg.in/alecthomas/kingpin.v2
+  version: ^2.2.5
+- package: github.com/sirupsen/logrus
+  version: ^1.0.3
+- package: golang.org/x/sys
+  subpackages:
+  - unix
+- package: golang.org/x/crypto
+  subpackages:
+  - ssh/terminal
