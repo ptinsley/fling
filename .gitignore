@@ -15,4 +15,7 @@
 
 .vscode
 
+dist
+main
+
 test.json
