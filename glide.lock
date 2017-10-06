@@ -1,5 +1,5 @@
 hash: e757657b3c063d2740bb675737d07cf4bed7c7ebc360ad1d25c7daec622a8157
-updated: 2017-10-03T23:30:56.304667-05:00
+updated: 2017-10-05T17:39:15.721134-05:00
 imports:
 - name: cloud.google.com/go
   version: eaddaf6dd7ee35fd3c2420c8d27478db176b0485
@@ -69,14 +69,14 @@ imports:
   - unix
   - windows
 - name: golang.org/x/text
-  version: 1cbadb444a806fd9430d14ad08967ed91da4fa0a
+  version: d82c1812e304abfeeabd31e995a115a2855bf642
   subpackages:
   - secure/bidirule
   - transform
   - unicode/bidi
   - unicode/norm
 - name: google.golang.org/api
-  version: 406e6cffe51212e465c56554f243c115595e135a
+  version: 7a7376eff6a51c6a053fcf8e9e50bf01a20f2673
   subpackages:
   - googleapi/transport
   - internal
@@ -109,7 +109,7 @@ imports:
   - googleapis/rpc/status
   - protobuf/field_mask
 - name: google.golang.org/grpc
-  version: 3bf110cd0cef4e896aa6331d44ca4a0c407bbaf3
+  version: 22c3f92f5faea8db492fb0f5ae4daf0d2752b19e
   subpackages:
   - balancer
   - codes

@@ -30,18 +30,41 @@ Todo:
 
 //FlingConfig - top level structure of json config file
 type FlingConfig struct {
-	PubSubProject  string      `json:"pubsub_project"`
-	PubSubTopic    string      `json:"pubsub_topic"`
-	PubSubAuthFile string      `json:"pubsub_auth_file"`
-	Files          []FlingFile `json:"files"`
+	Files     []FlingFile     `json:"files"`
+	Rotations []FlingRotation `json:"rotations"`
+	Outputs   []FlingOutput   `json:"outputs"`
 }
 
-//FlingFile - instance of a file to monitor / rotate (if defined)
+// FlingRotation - sets of files to rotate and the commands to run afterwards
+type FlingRotation struct {
+	Files          []string `json:"files"`
+	RotateCommand  string   `json:"rotate_command"`
+	RotateInterval int      `json:"rotate_interval"`
+}
+
+// FlingOutput - A log output destination
+type FlingOutput struct {
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	PubSubProject  string `json:"pubsub_project"`
+	PubSubTopic    string `json:"pubsub_topic"`
+	PubSubAuthFile string `json:"pubsub_auth_file"`
+}
+
+//FlingFile - instance of a file to monitor
 type FlingFile struct {
-	Path           string `json:"path"`
-	IsJSON         bool   `json:"is_json"`
-	RotateCommand  string `json:"rotate_command"`
-	RotateInterval int    `json:"rotate_interval"`
+	Path       string               `json:"path"`
+	IsJSON     bool                 `json:"is_json"`
+	Outputs    []string             `json:"outputs"`
+	Injections []FlingFileInjection `json:"injections"`
+}
+
+//FlingFileInjection - fields to add to the log line
+type FlingFileInjection struct {
+	Field    string `json:"field"`
+	Value    string `json:"value"`
+	ENVValue string `json:"env_value"`
+	Hostname bool   `json:"hostname"`
 }
 
 func init() {
@@ -64,20 +87,15 @@ func main() {
 		os.Exit(-1)
 	}
 
-	//Setup a channel to funnel messages from the file readers to pub/sub
-	messages := make(chan []byte, 1000)
+	//var outputs map[string]interface{}
+	//start up go routines for any outputs
+	outputs := handleOutputs(config.Outputs)
+
+	//start up go routines for any rotations requested
+	handleRotations(config.Rotations)
 
 	//setup handlers for all of the files to be watched
-	for _, file := range config.Files {
-
-		handleFile(file, messages)
-	}
-
-	go processMessages(
-		messages,
-		config.PubSubProject,
-		config.PubSubTopic,
-		config.PubSubAuthFile)
+	handleFiles(config.Files, outputs)
 
 	select {} //Take a big nap FIXME: add signal handlers down the road
 }
@@ -95,125 +113,32 @@ func loadConfig(path string) (FlingConfig, error) {
 	return config, parseError
 }
 
-func handleFile(file FlingFile, messages chan []byte) {
-	log.WithFields(log.Fields{
-		"path": file.Path,
-	}).Info("Adding tail for file")
-	go follow(file.Path, messages, file.IsJSON)
+func handleOutputs(outputs []FlingOutput) map[string]interface{} {
+	var channels map[string]interface{}
+	channels = make(map[string]interface{})
 
-	if file.RotateInterval > 0 && file.RotateCommand != "" {
-		log.WithFields(log.Fields{
-			"path": file.Path,
-		}).Info("Rotate settings detected, adding rotate worker")
-		go rotate(file.Path, file.RotateCommand, file.RotateInterval)
+	for _, output := range outputs {
+		channels[output.Name] = make(chan []byte, 1000)
+		if output.Type == "pubsub" {
+			go outputPubSubWorker(output.PubSubProject, output.PubSubTopic, output.PubSubAuthFile, channels[output.Name].(chan []byte))
+		}
 	}
 
+	return channels
 }
 
-func follow(path string, messages chan []byte, isJSON bool) {
-	t, tailErr := tail.TailFile(path, tail.Config{Follow: true, ReOpen: true, Poll: true})
-
-	if tailErr != nil {
-		log.WithFields(log.Fields{
-			"path":  path,
-			"error": tailErr,
-		}).Error("Couldn't tail file")
-	}
-
-	for line := range t.Lines {
-		var logEntry map[string]interface{}
-
-		log.WithFields(log.Fields{
-			"path": path,
-			"line": line.Text,
-		}).Debug("Processing log line")
-
-		if isJSON {
-			unmarshalErr := json.Unmarshal([]byte(line.Text), &logEntry)
-			if unmarshalErr != nil {
-				log.WithFields(log.Fields{
-					"message": line.Text,
-					"error":   unmarshalErr,
-				}).Error("Couldn't parse JSON log line")
-
-				continue
-			}
-		} else {
-			logEntry = make(map[string]interface{})
-			logEntry["message"] = line.Text
-		}
-
-		//FIXME: Inject other pertinent context info
-		logEntry["fling.source"] = path
-
-		eventJSON, marshalErr := json.Marshal(logEntry)
-		if marshalErr != nil {
-			log.WithFields(log.Fields{
-				"error": marshalErr,
-			}).Error("Couldn't create JSON")
-
-			continue
-		}
-		messages <- eventJSON
-	}
-}
-
-func rotate(path string, command string, interval int) {
-	for {
-		log.WithFields(log.Fields{
-			"seconds": interval,
-			"path":    path,
-		}).Info("Sleeping before rotate")
-
-		time.Sleep(time.Duration(interval) * time.Second)
-
-		renameErr := os.Rename(path, path+".old")
-		if renameErr != nil {
-			log.WithFields(log.Fields{
-				"error": interval,
-				"path":  path,
-			}).Error("Unable to move log file in rotation")
-
-			continue
-		} else {
-			log.WithFields(log.Fields{
-				"path": path,
-			}).Info("Moved log file")
-		}
-
-		_, cmdError := exec.Command("sh", "-c", command).Output()
-		if cmdError != nil {
-			log.WithFields(log.Fields{
-				"error":   cmdError,
-				"path":    path,
-				"command": command,
-			}).Error("Rotate command failed")
-		} else {
-			log.WithFields(log.Fields{
-				"path":    path,
-				"command": command,
-			}).Info("Rotation command successful")
-		}
-	}
-}
-
-func processMessages(
-	messages chan []byte,
-	pubSubProject string,
-	pubSubTopic string,
-	pubSubAuthFile string) {
-
+func outputPubSubWorker(project string, topicName string, authfile string, channel chan []byte) {
 	ctx := context.Background()
-	pubSubClient, err := pubsub.NewClient(ctx, pubSubProject, option.WithServiceAccountFile(pubSubAuthFile))
+	pubSubClient, err := pubsub.NewClient(ctx, project, option.WithServiceAccountFile(authfile))
 	if err != nil {
 
 	}
 
-	topic := pubSubClient.Topic(pubSubTopic)
+	topic := pubSubClient.Topic(topicName)
 	defer topic.Stop()
 
 	for {
-		message := <-messages
+		message := <-channel
 		result := topic.Publish(ctx, &pubsub.Message{
 			Data: message,
 		})
@@ -230,4 +155,145 @@ func processMessages(
 		}
 
 	}
+}
+
+func handleFiles(files []FlingFile, outputs map[string]interface{}) {
+	for _, file := range files {
+		log.WithFields(log.Fields{
+			"path": file.Path,
+		}).Info("Adding tail for file")
+		go fileWorker(file, outputs)
+	}
+}
+
+func fileWorker(file FlingFile, outputs map[string]interface{}) {
+	t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: true})
+
+	if tailErr != nil {
+		log.WithFields(log.Fields{
+			"path":  file.Path,
+			"error": tailErr,
+		}).Error("Couldn't tail file")
+	}
+
+	for line := range t.Lines {
+		var logEntry map[string]interface{}
+
+		log.WithFields(log.Fields{
+			"path": file.Path,
+			"line": line.Text,
+		}).Debug("Processing log line")
+
+		if file.IsJSON {
+			unmarshalErr := json.Unmarshal([]byte(line.Text), &logEntry)
+			if unmarshalErr != nil {
+				log.WithFields(log.Fields{
+					"message": line.Text,
+					"error":   unmarshalErr,
+				}).Error("Couldn't parse JSON log line")
+
+				continue
+			}
+		} else {
+			logEntry = make(map[string]interface{})
+			logEntry["message"] = line.Text
+		}
+
+		//FIXME: Inject other pertinent context info
+		logEntry["fling.source"] = file.Path
+
+		if _, ok := logEntry["@timestamp"]; !ok {
+			logEntry["@timestamp"] = get3339Time()
+		}
+
+		handleInjections(&logEntry, file.Injections)
+
+		eventJSON, marshalErr := json.Marshal(logEntry)
+		if marshalErr != nil {
+			log.WithFields(log.Fields{
+				"error": marshalErr,
+			}).Error("Couldn't create JSON")
+
+			continue
+		}
+
+		dispatchEntry(eventJSON, file.Outputs, outputs)
+	}
+}
+
+func handleInjections(logEntry *map[string]interface{}, injections []FlingFileInjection) {
+	for _, injection := range injections {
+		if injection.ENVValue != "" {
+			(*logEntry)[injection.Field] = os.Getenv(injection.ENVValue)
+		} else if injection.Value != "" {
+			(*logEntry)[injection.Field] = injection.Value
+		} else if injection.Hostname {
+			hostname, _ := os.Hostname()
+			(*logEntry)[injection.Field] = hostname
+		}
+	}
+}
+
+func dispatchEntry(message []byte, outputs []string, channels map[string]interface{}) {
+	for _, output := range outputs {
+		channels[output].(chan []byte) <- message
+	}
+}
+
+func handleRotations(rotations []FlingRotation) {
+	for _, rotation := range rotations {
+		go rotateWorker(rotation)
+	}
+}
+
+func rotateWorker(rotation FlingRotation) {
+	for {
+		log.WithFields(log.Fields{
+			"seconds": rotation.RotateInterval,
+		}).Info("Sleeping before rotate")
+
+		time.Sleep(time.Duration(rotation.RotateInterval) * time.Second)
+
+		rotate(rotation)
+	}
+}
+
+func rotate(rotation FlingRotation) {
+	//Handle the files first
+	for _, path := range rotation.Files {
+		//FIXME add file size check
+
+		renameErr := os.Rename(path, path+".old")
+		if renameErr != nil {
+			log.WithFields(log.Fields{
+				"path": path,
+			}).Error("Unable to move log file in rotation")
+
+			continue
+		} else {
+			log.WithFields(log.Fields{
+				"path": path,
+			}).Info("Moved log file")
+		}
+	}
+
+	// Perform rotation command
+	if rotation.RotateCommand != "" {
+		_, cmdError := exec.Command("sh", "-c", rotation.RotateCommand).Output()
+		if cmdError != nil {
+			log.WithFields(log.Fields{
+				"error":   cmdError,
+				"command": rotation.RotateCommand,
+			}).Error("Rotate command failed")
+		} else {
+			log.WithFields(log.Fields{
+				"command": rotation.RotateCommand,
+			}).Info("Rotation command successful")
+		}
+	}
+}
+
+//Get an RFC 3339 Nano Time for use in log timestamps
+func get3339Time() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)
 }

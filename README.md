@@ -6,22 +6,131 @@ We have several different log types that are generated in containers and either 
 Config File Example:
 ```
 {
-    "pubsub_topic": "topic-name",
-    "pubsub_auth_file": "/path/to/service_creds.json",
-    "pubsub_project": "gcp-project",
     "files": [
         {
-            "path": "/var/log/nginx/access.log",
+            "path": "/webapp/log/production.log",
+            "outputs": [
+                "k8s2elk"
+            ],
+            "injections":[
+                {
+                    "field": "hostname",
+                    "hostname": true
+                },
+                {
+                    "field": "appname",
+                    "env_value": "APPNAME"
+                },
+                {
+                    "field": "generator",
+                    "value": "rails"
+                }
+            ]
         },
         {
-            "path": "/super/chatty.log",
-            "rotate_interval": 360,
-            "rotate_command": "rotate command"
+            "path": "/webapp/log/passenger.8080.log",
+            "outputs": [
+                "k8s2elk"
+            ],
+            "injections":[
+                {
+                    "field": "hostname",
+                    "hostname": true
+                },
+                {
+                    "field": "appname",
+                    "env_value": "APPNAME"
+                },
+                {
+                    "field": "generator",
+                    "value": "passenger"
+                }
+            ]
         },
         {
-            "path": "/app/log/custom.jlog",
-            "is_json": true
+            "path": "/webapp/log/newrelic_agent.log",
+            "outputs": [
+                "k8s2elk"
+            ],
+            "injections":[
+                {
+                    "field": "hostname",
+                    "hostname": true
+                },
+                {
+                    "field": "generator",
+                    "value": "newrelic"
+                }
+            ]
+        },
+        {
+            "path": "/webapp/log/nginx/error.log",
+            "outputs": [
+                "k8s2elk"
+            ],
+            "injections":[
+                {
+                    "field": "hostname",
+                    "hostname": true
+                },
+                {
+                    "field": "appname",
+                    "env_value": "APPNAME"
+                },
+                {
+                    "field": "generator",
+                    "value": "nginx_error"
+                }
+            ]
+        },
+        {
+            "path": "/webapp/log/nginx/access.jlog",
+            "is_json": true,
+            "outputs": [
+                "k8s2bq",
+                "k8s2elk"
+            ],
+            "injections":[
+                {
+                    "field": "srchost",
+                    "env_value": "HOSTNAME"
+                },
+                {
+                    "field": "appname",
+                    "env_value": "APPNAME"
+                },
+                {
+                    "field": "generator",
+                    "value": "nginx_access"
+                }
+            ]
         }
+    ],
+    "rotations": [
+        {
+            "files": [
+                "/webapp/logs/nginx/access.jlog",
+                "/webapp/logs/nginx/error.log"
+            ],
+            "rotate_command": "s6-svc -h /var/run/s6/services/nginx",
+            "rotate_interval": 300
+        }
+    ],
+    "outputs": [
+      {
+          "name": "k8s2elk",
+          "type": "pubsub",
+          "pubsub_project": "project-name",
+          "pubsub_auth_file": "/super/secret/key.json",
+          "pubsub_topic": "fling-k8s"
+      },
+      {
+        "name": "k8s2bq",
+        "type": "pubsub",
+        "pubsub_project": "project-name",
+        "pubsub_auth_file": "/super/secret/key.json",
+        "pubsub_topic": "fling-k8s-bqonly"
+      }
     ]
 }
 ```
