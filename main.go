@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"cloud.google.com/go/pubsub"
@@ -159,10 +160,14 @@ func outputPubSubWorker(project string, topicName string, authfile string, chann
 
 func handleFiles(files []FlingFile, outputs map[string]interface{}) {
 	for _, file := range files {
-		log.WithFields(log.Fields{
-			"path": file.Path,
-		}).Info("Adding tail for file")
-		go fileWorker(file, outputs)
+		paths, _ := filepath.Glob(file.Path)
+		for _, path := range paths {
+			file.Path = path
+			log.WithFields(log.Fields{
+				"path": file.Path,
+			}).Info("Adding tail for file")
+			go fileWorker(file, outputs)
+		}
 	}
 }
 
