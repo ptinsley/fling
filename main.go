@@ -56,6 +56,7 @@ type FlingOutput struct {
 type FlingFile struct {
 	Path       string               `json:"path"`
 	IsJSON     bool                 `json:"is_json"`
+	IsGlob     bool                 `json:"is_glob"`
 	Outputs    []string             `json:"outputs"`
 	Injections []FlingFileInjection `json:"injections"`
 }
@@ -71,7 +72,7 @@ type FlingFileInjection struct {
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.WarnLevel)
+	log.SetLevel(log.InfoLevel)
 }
 
 func main() {
@@ -138,6 +139,9 @@ func outputPubSubWorker(project string, topicName string, authfile string, chann
 	topic := pubSubClient.Topic(topicName)
 	defer topic.Stop()
 
+	//send hello message to topic to keep track of what clients, versions etc.. are sending in data
+	createPubSubInitMsg(topicName, channel)
+
 	for {
 		message := <-channel
 		result := topic.Publish(ctx, &pubsub.Message{
@@ -158,17 +162,46 @@ func outputPubSubWorker(project string, topicName string, authfile string, chann
 	}
 }
 
+func createPubSubInitMsg(topicName string, channel chan []byte) {
+	var logEntry map[string]interface{}
+	logEntry = make(map[string]interface{})
+	hostname, _ := os.Hostname()
+
+	logEntry["pubsub_topic"] = topicName
+	logEntry["fling_version"] = version
+	logEntry["hostname"] = hostname
+	logEntry["@timestamp"] = get3339Time()
+	logEntry["message"] = "Starting up Fling PubSub Output"
+
+	eventJSON, marshalErr := json.Marshal(logEntry)
+	if marshalErr != nil {
+		log.WithFields(log.Fields{}).Error("PubSub Init message creation failed")
+		return
+	}
+
+	channel <- eventJSON
+	log.WithFields(log.Fields{"topic": topicName}).Info("PubSub Init message queued")
+}
+
 func handleFiles(files []FlingFile, outputs map[string]interface{}) {
 	for _, file := range files {
-		paths, _ := filepath.Glob(file.Path)
-		for _, path := range paths {
-			file.Path = path
-			log.WithFields(log.Fields{
-				"path": file.Path,
-			}).Info("Adding tail for file")
-			go fileWorker(file, outputs)
+		if file.IsGlob {
+			paths, _ := filepath.Glob(file.Path)
+			for _, path := range paths {
+				file.Path = path
+				startFileWorker(file, outputs)
+			}
+		} else {
+			startFileWorker(file, outputs)
 		}
 	}
+}
+
+func startFileWorker(file FlingFile, outputs map[string]interface{}) {
+	log.WithFields(log.Fields{
+		"path": file.Path,
+	}).Info("Adding tail for file")
+	go fileWorker(file, outputs)
 }
 
 func fileWorker(file FlingFile, outputs map[string]interface{}) {
