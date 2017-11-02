@@ -168,14 +168,14 @@ func handleOutLoggers(outputs []FlingOutLogger) map[string]interface{} {
 	channels = make(map[string]interface{})
 
 	for _, output := range outputs {
-		channels[output.Name] = make(chan []byte, 1000)
-		go outputLoggerWorker(output.Name, output.IsEnabled, channels[output.Name].(chan []byte))
+		channels[output.Name] = make(chan map[string]interface{}, 1000)
+		go outputLoggerWorker(output.Name, output.IsEnabled, channels[output.Name].(chan map[string]interface{}))
 	}
 
 	return channels
 }
 
-func outputLoggerWorker(name string, isEnabled bool, channel chan []byte) {
+func outputLoggerWorker(name string, isEnabled bool, channel chan map[string]interface{}) {
 	for {
 		message := <-channel
 
@@ -192,14 +192,14 @@ func handleOutPubSubs(outputs []FlingOutPubSub) map[string]interface{} {
 	channels = make(map[string]interface{})
 
 	for _, output := range outputs {
-		channels[output.Name] = make(chan []byte, 1000)
-		go outputPubSubWorker(output.Project, output.Topic, output.AuthFile, channels[output.Name].(chan []byte))
+		channels[output.Name] = make(chan map[string]interface{}, 1000)
+		go outputPubSubWorker(output.Project, output.Topic, output.AuthFile, channels[output.Name].(chan map[string]interface{}))
 	}
 
 	return channels
 }
 
-func outputPubSubWorker(project string, topicName string, authfile string, channel chan []byte) {
+func outputPubSubWorker(project string, topicName string, authfile string, channel chan map[string]interface{}) {
 	ctx := context.Background()
 	pubSubClient, err := pubsub.NewClient(ctx, project, option.WithServiceAccountFile(authfile))
 	if err != nil {
@@ -213,7 +213,13 @@ func outputPubSubWorker(project string, topicName string, authfile string, chann
 	createPubSubInitMsg(topicName, channel)
 
 	for {
-		message := <-channel
+		eventJSON := <-channel
+
+		message, marshalErr := json.Marshal(eventJSON)
+		if marshalErr != nil {
+			log.WithFields(log.Fields{}).Error("Event Marshalling for pub/sub submission failed")
+			return
+		}
 		result := topic.Publish(ctx, &pubsub.Message{
 			Data: message,
 		})
@@ -232,7 +238,7 @@ func outputPubSubWorker(project string, topicName string, authfile string, chann
 	}
 }
 
-func createPubSubInitMsg(topicName string, channel chan []byte) {
+func createPubSubInitMsg(topicName string, channel chan map[string]interface{}) {
 	var logEntry map[string]interface{}
 	logEntry = make(map[string]interface{})
 	hostname, _ := os.Hostname()
@@ -243,13 +249,7 @@ func createPubSubInitMsg(topicName string, channel chan []byte) {
 	logEntry["@timestamp"] = get3339Time()
 	logEntry["message"] = "Starting up Fling PubSub Output"
 
-	eventJSON, marshalErr := json.Marshal(logEntry)
-	if marshalErr != nil {
-		log.WithFields(log.Fields{}).Error("PubSub Init message creation failed")
-		return
-	}
-
-	channel <- eventJSON
+	channel <- logEntry
 	log.WithFields(log.Fields{"topic": topicName}).Info("PubSub Init message queued")
 }
 
@@ -316,16 +316,7 @@ func fileWorker(file FlingInFile, outputs map[string]interface{}) {
 
 		handleInjections(&logEntry, file.Injections)
 
-		eventJSON, marshalErr := json.Marshal(logEntry)
-		if marshalErr != nil {
-			log.WithFields(log.Fields{
-				"error": marshalErr,
-			}).Error("Couldn't create JSON")
-
-			continue
-		}
-
-		dispatchEntry(eventJSON, file.Outputs, outputs)
+		dispatchEntry(logEntry, file.Outputs, outputs)
 	}
 }
 
@@ -342,9 +333,9 @@ func handleInjections(logEntry *map[string]interface{}, injections []FlingInject
 	}
 }
 
-func dispatchEntry(message []byte, outputs []string, channels map[string]interface{}) {
+func dispatchEntry(eventJSON map[string]interface{}, outputs []string, channels map[string]interface{}) {
 	for _, output := range outputs {
-		channels[output].(chan []byte) <- message
+		channels[output].(chan map[string]interface{}) <- eventJSON
 	}
 }
 
