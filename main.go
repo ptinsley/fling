@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -31,9 +32,25 @@ Todo:
 
 //FlingConfig - top level structure of json config file
 type FlingConfig struct {
-	Files     []FlingFile     `json:"files"`
+	Input     FlingInput      `json:"input"`
+	Files     []FlingInFile   `json:"files"`
 	Rotations []FlingRotation `json:"rotations"`
-	Outputs   []FlingOutput   `json:"outputs"`
+	Output    FlingOutput     `json:"output"`
+}
+
+//FlingInput - map of input type arrays
+type FlingInput struct {
+	PubSubs []FlingInPubSub `json:"pubsub"`
+	Files   []FlingInFile   `json:"files"`
+}
+
+//FlingInPubSub - pub/sub input type
+type FlingInPubSub struct {
+	AuthFile     string           `json:"auth_file"`
+	Project      string           `json:"project"`
+	Subscription string           `json:"subscription"`
+	Outputs      []string         `json:"outputs"`
+	Injections   []FlingInjection `json:"injections"`
 }
 
 // FlingRotation - sets of files to rotate and the commands to run afterwards
@@ -43,26 +60,38 @@ type FlingRotation struct {
 	RotateInterval int      `json:"rotate_interval"`
 }
 
-// FlingOutput - A log output destination
+//FlingOutput - map of output types
 type FlingOutput struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	PubSubProject  string `json:"pubsub_project"`
-	PubSubTopic    string `json:"pubsub_topic"`
-	PubSubAuthFile string `json:"pubsub_auth_file"`
+	PubSubs []FlingOutPubSub `json:"pubsub"`
+	Loggers []FlingOutLogger `json:"logger"`
 }
 
-//FlingFile - instance of a file to monitor
-type FlingFile struct {
-	Path       string               `json:"path"`
-	IsJSON     bool                 `json:"is_json"`
-	IsGlob     bool                 `json:"is_glob"`
-	Outputs    []string             `json:"outputs"`
-	Injections []FlingFileInjection `json:"injections"`
+//FlingOutPubSub - A log output destination
+type FlingOutPubSub struct {
+	Name     string `json:"name"`
+	Project  string `json:"project"`
+	Topic    string `json:"topic"`
+	AuthFile string `json:"auth_file"`
 }
 
-//FlingFileInjection - fields to add to the log line
-type FlingFileInjection struct {
+//FlingOutLogger - Send messages to the logger library
+//FIXME add level and injections
+type FlingOutLogger struct {
+	Name      string `json:"name"`
+	IsEnabled bool   `json:"is_enabled"`
+}
+
+//FlingInFile - instance of a file to monitor
+type FlingInFile struct {
+	Path       string           `json:"path"`
+	IsJSON     bool             `json:"is_json"`
+	IsGlob     bool             `json:"is_glob"`
+	Outputs    []string         `json:"outputs"`
+	Injections []FlingInjection `json:"injections"`
+}
+
+//FlingInjection - fields to add to the log line
+type FlingInjection struct {
 	Field    string `json:"field"`
 	Value    string `json:"value"`
 	ENVValue string `json:"env_value"`
@@ -72,7 +101,7 @@ type FlingFileInjection struct {
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel)
+	log.SetLevel(log.DebugLevel)
 }
 
 func main() {
@@ -91,13 +120,13 @@ func main() {
 
 	//var outputs map[string]interface{}
 	//start up go routines for any outputs
-	outputs := handleOutputs(config.Outputs)
+	outputChannels := handleOutputs(config.Output)
 
 	//start up go routines for any rotations requested
 	handleRotations(config.Rotations)
 
 	//setup handlers for all of the files to be watched
-	handleFiles(config.Files, outputs)
+	handleInputs(config.Input, outputChannels)
 
 	select {} //Take a big nap FIXME: add signal handlers down the road
 }
@@ -115,15 +144,56 @@ func loadConfig(path string) (FlingConfig, error) {
 	return config, parseError
 }
 
-func handleOutputs(outputs []FlingOutput) map[string]interface{} {
+func handleInputs(input FlingInput, outputChannels map[string]interface{}) {
+	handleInFiles(input.Files, outputChannels)
+}
+
+func handleOutputs(outputs FlingOutput) map[string]interface{} {
+	var channels map[string]interface{}
+	channels = make(map[string]interface{})
+
+	for k, v := range handleOutPubSubs(outputs.PubSubs) {
+		channels[k] = v
+	}
+
+	for k, v := range handleOutLoggers(outputs.Loggers) {
+		channels[k] = v
+	}
+
+	return channels
+}
+
+func handleOutLoggers(outputs []FlingOutLogger) map[string]interface{} {
 	var channels map[string]interface{}
 	channels = make(map[string]interface{})
 
 	for _, output := range outputs {
 		channels[output.Name] = make(chan []byte, 1000)
-		if output.Type == "pubsub" {
-			go outputPubSubWorker(output.PubSubProject, output.PubSubTopic, output.PubSubAuthFile, channels[output.Name].(chan []byte))
+		go outputLoggerWorker(output.Name, output.IsEnabled, channels[output.Name].(chan []byte))
+	}
+
+	return channels
+}
+
+func outputLoggerWorker(name string, isEnabled bool, channel chan []byte) {
+	for {
+		message := <-channel
+
+		if isEnabled {
+			log.WithFields(log.Fields{
+				"OutputName": name,
+			}).Debug(fmt.Sprintf("%s", message))
 		}
+	}
+}
+
+func handleOutPubSubs(outputs []FlingOutPubSub) map[string]interface{} {
+	var channels map[string]interface{}
+	channels = make(map[string]interface{})
+
+	for _, output := range outputs {
+		channels[output.Name] = make(chan []byte, 1000)
+		go outputPubSubWorker(output.Project, output.Topic, output.AuthFile, channels[output.Name].(chan []byte))
 	}
 
 	return channels
@@ -183,7 +253,7 @@ func createPubSubInitMsg(topicName string, channel chan []byte) {
 	log.WithFields(log.Fields{"topic": topicName}).Info("PubSub Init message queued")
 }
 
-func handleFiles(files []FlingFile, outputs map[string]interface{}) {
+func handleInFiles(files []FlingInFile, outputs map[string]interface{}) {
 	for _, file := range files {
 		if file.IsGlob {
 			paths, _ := filepath.Glob(file.Path)
@@ -197,14 +267,14 @@ func handleFiles(files []FlingFile, outputs map[string]interface{}) {
 	}
 }
 
-func startFileWorker(file FlingFile, outputs map[string]interface{}) {
+func startFileWorker(file FlingInFile, outputs map[string]interface{}) {
 	log.WithFields(log.Fields{
 		"path": file.Path,
 	}).Info("Adding tail for file")
 	go fileWorker(file, outputs)
 }
 
-func fileWorker(file FlingFile, outputs map[string]interface{}) {
+func fileWorker(file FlingInFile, outputs map[string]interface{}) {
 	t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: true})
 
 	if tailErr != nil {
@@ -259,7 +329,7 @@ func fileWorker(file FlingFile, outputs map[string]interface{}) {
 	}
 }
 
-func handleInjections(logEntry *map[string]interface{}, injections []FlingFileInjection) {
+func handleInjections(logEntry *map[string]interface{}, injections []FlingInjection) {
 	for _, injection := range injections {
 		if injection.ENVValue != "" {
 			(*logEntry)[injection.Field] = os.Getenv(injection.ENVValue)
