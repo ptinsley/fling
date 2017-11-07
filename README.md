@@ -3,6 +3,14 @@ Fling is a golang logshipper / rotator focussed on getting logs into Google Clou
 
 We have several different log types that are generated in containers and either cannot or don't want to use STDOUT logging. This causes the obvious problem of steadily increasing disk space until kubernetes nodes run out and bad things happen.
 
+# Cutting a new version of Fling
+```
+git tag -a vX.X.X -m 'about this version'
+git push origin vX.X.X
+goreleaser --rm-dist
+```
+
+
 Config File Example:
 ```
 {

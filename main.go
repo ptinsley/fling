@@ -19,6 +19,7 @@ import (
 
 var (
 	configFile = kingpin.Flag("config", "Configuration file").Required().Short('c').String()
+	debugFlag  = kingpin.Flag("debug", "Enable Debug Logging").Short('d').Bool()
 	version    = "master" //overridden by build system, master as default
 )
 
@@ -134,7 +135,7 @@ type FlingInjection struct {
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.InfoLevel)
 }
 
 func main() {
@@ -142,6 +143,10 @@ func main() {
 	//Parse command line params
 	kingpin.Version(version)
 	kingpin.Parse()
+
+	if *debugFlag {
+		log.SetLevel(log.DebugLevel)
+	}
 
 	var config, err = loadConfig(*configFile)
 	if err != nil {
