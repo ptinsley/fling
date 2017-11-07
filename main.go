@@ -30,6 +30,13 @@ Todo:
 - add signal handler support
 */
 
+//FlingEvent - struct to hold events and any further tracking fields needed
+// (that won't follow the event out of fling)
+type FlingEvent struct {
+	UniqueID string
+	JSON     map[string]interface{}
+}
+
 //FlingConfig - top level structure of json config file
 type FlingConfig struct {
 	Input     FlingInput      `json:"input"`
@@ -62,8 +69,34 @@ type FlingRotation struct {
 
 //FlingOutput - map of output types
 type FlingOutput struct {
-	PubSubs []FlingOutPubSub `json:"pubsub"`
-	Loggers []FlingOutLogger `json:"logger"`
+	PubSubs    []FlingOutPubSub   `json:"pubsub"`
+	Loggers    []FlingOutLogger   `json:"logger"`
+	Elastics   []FlingOutElastic  `json:"elasticsearch"`
+	BigQueries []FlingOutBigQuery `json:"bigquery"`
+}
+
+//FlingOutBigQuery - Big query output config
+type FlingOutBigQuery struct {
+	Name         string `json:"name"`
+	ProjectID    string `json:"project_id"`
+	BatchSize    int    `json:"batch_size,omitempty"`
+	BatchTimeout int    `json:"batch_timeout,omitempty"`
+}
+
+//FlingOutElastic - Elastic output config
+type FlingOutElastic struct {
+	Name     string               `json:"name"`
+	Index    string               `json:"index_pattern"`
+	Hosts    []string             `json:"hosts"`
+	Template FlingElasticTemplate `json:"template"`
+}
+
+//FlingElasticTemplate - information on managing an elasticsearch indexing template
+type FlingElasticTemplate struct {
+	Name      string `json:"name"`
+	Manage    bool   `json:"manage"`
+	Overwrite bool   `json:"overwrite"`
+	Path      string `json:"path"`
 }
 
 //FlingOutPubSub - A log output destination
@@ -146,6 +179,7 @@ func loadConfig(path string) (FlingConfig, error) {
 
 func handleInputs(input FlingInput, outputChannels map[string]interface{}) {
 	handleInFiles(input.Files, outputChannels)
+	//handleInPubSub(input.PubSubs, outputChannels)
 }
 
 func handleOutputs(outputs FlingOutput) map[string]interface{} {
@@ -159,8 +193,98 @@ func handleOutputs(outputs FlingOutput) map[string]interface{} {
 	for k, v := range handleOutLoggers(outputs.Loggers) {
 		channels[k] = v
 	}
+	/*
+		for k, v := range handleOutElastics(outputs.Elastics) {
+			channels[k] = v
+		}
+
+		for k, v := range handleOutBigQuery(outputs.BigQueries) {
+			channels[k] = v
+		}
+	*/
 
 	return channels
+}
+
+func handleOutBigQuery(outputs []FlingOutBigQuery) map[string]interface{} {
+	var channels map[string]interface{}
+	channels = make(map[string]interface{})
+
+	for _, output := range outputs {
+		if output.BatchSize == 0 {
+			log.WithFields(log.Fields{
+				"OutputName": output.Name,
+			}).Debug("BigQuery BatchSize not set, applying default of 500")
+			output.BatchSize = 500
+		}
+		if output.BatchTimeout == 0 {
+			log.WithFields(log.Fields{
+				"OutputName": output.Name,
+			}).Debug("BigQuery BatchTimeout not set, applying default of 30 seconds")
+			output.BatchTimeout = 30
+		}
+		//FIXME add error checking to projectID etc...
+		channels[output.Name] = make(chan FlingEvent, 1000)
+		go outputBigQueryWorker(output, channels[output.Name].(chan FlingEvent))
+	}
+
+	return channels
+}
+
+func outputBigQueryWorker(output FlingOutBigQuery, channel chan FlingEvent) {
+	var batch []FlingEvent
+	flush := make(chan bool, 1)
+
+	var timeout = time.Duration(output.BatchTimeout) * time.Second
+	timer := time.NewTimer(timeout)
+	/*
+		ctx := context.Background()
+
+		client, err := bigquery.NewClient(ctx, output.ProjectID)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"OutputName": output.Name,
+			}).Fatal(fmt.Sprintf("Failed to create client: %v", err))
+
+			return
+		}
+	*/
+
+	for {
+		select {
+		case event := <-channel:
+			log.WithFields(log.Fields{
+				"OutputName": output.Name,
+				"UniqueID":   event.UniqueID,
+			}).Debug(fmt.Sprintf("outputBigQueryWorker appending %s", event.JSON))
+
+			batch = append(batch, event)
+
+			if len(batch) == output.BatchSize {
+				log.WithFields(log.Fields{
+					"OutputName": output.Name,
+				}).Debug("batch size reached, flushing")
+				flush <- true
+			}
+		case <-flush:
+			if len(batch) > 0 {
+				log.WithFields(log.Fields{
+					"OutputName": output.Name,
+				}).Debug("batch complete")
+
+				//FIXME: Add the code to actually send stuff to BQ
+
+				batch = nil
+				timer.Reset(timeout)
+			}
+		case <-timer.C:
+			log.WithFields(log.Fields{
+				"OutputName": output.Name,
+			}).Debug("timer exceeded")
+
+			flush <- true
+		}
+	}
 }
 
 func handleOutLoggers(outputs []FlingOutLogger) map[string]interface{} {
@@ -168,21 +292,22 @@ func handleOutLoggers(outputs []FlingOutLogger) map[string]interface{} {
 	channels = make(map[string]interface{})
 
 	for _, output := range outputs {
-		channels[output.Name] = make(chan map[string]interface{}, 1000)
-		go outputLoggerWorker(output.Name, output.IsEnabled, channels[output.Name].(chan map[string]interface{}))
+		channels[output.Name] = make(chan FlingEvent, 1000)
+		go outputLoggerWorker(output.Name, output.IsEnabled, channels[output.Name].(chan FlingEvent))
 	}
 
 	return channels
 }
 
-func outputLoggerWorker(name string, isEnabled bool, channel chan map[string]interface{}) {
+func outputLoggerWorker(name string, isEnabled bool, channel chan FlingEvent) {
 	for {
-		message := <-channel
+		event := <-channel
 
 		if isEnabled {
 			log.WithFields(log.Fields{
 				"OutputName": name,
-			}).Debug(fmt.Sprintf("%s", message))
+				"UniqueID":   event.UniqueID,
+			}).Debug(fmt.Sprintf("%s", event.JSON))
 		}
 	}
 }
@@ -192,14 +317,14 @@ func handleOutPubSubs(outputs []FlingOutPubSub) map[string]interface{} {
 	channels = make(map[string]interface{})
 
 	for _, output := range outputs {
-		channels[output.Name] = make(chan map[string]interface{}, 1000)
-		go outputPubSubWorker(output.Project, output.Topic, output.AuthFile, channels[output.Name].(chan map[string]interface{}))
+		channels[output.Name] = make(chan FlingEvent, 1000)
+		go pubSubOutWorker(output.Project, output.Topic, output.AuthFile, channels[output.Name].(chan FlingEvent))
 	}
 
 	return channels
 }
 
-func outputPubSubWorker(project string, topicName string, authfile string, channel chan map[string]interface{}) {
+func pubSubOutWorker(project string, topicName string, authfile string, channel chan FlingEvent) {
 	ctx := context.Background()
 	pubSubClient, err := pubsub.NewClient(ctx, project, option.WithServiceAccountFile(authfile))
 	if err != nil {
@@ -213,9 +338,9 @@ func outputPubSubWorker(project string, topicName string, authfile string, chann
 	createPubSubInitMsg(topicName, channel)
 
 	for {
-		eventJSON := <-channel
+		event := <-channel
 
-		message, marshalErr := json.Marshal(eventJSON)
+		message, marshalErr := json.Marshal(event.JSON)
 		if marshalErr != nil {
 			log.WithFields(log.Fields{}).Error("Event Marshalling for pub/sub submission failed")
 			return
@@ -238,7 +363,34 @@ func outputPubSubWorker(project string, topicName string, authfile string, chann
 	}
 }
 
-func createPubSubInitMsg(topicName string, channel chan map[string]interface{}) {
+func handleOutElastics(outputs []FlingOutElastic) map[string]interface{} {
+	var channels map[string]interface{}
+	channels = make(map[string]interface{})
+
+	for _, output := range outputs {
+		channels[output.Name] = make(chan FlingEvent, 1000)
+		go elasticOutWorker(output, channels[output.Name].(chan FlingEvent))
+	}
+
+	return channels
+}
+
+func elasticOutWorker(config FlingOutElastic, channel chan FlingEvent) {
+	if config.Template != (FlingElasticTemplate{}) {
+		log.WithFields(log.Fields{}).Debug("handling elastic template")
+		handleElasticTemplate(config)
+	}
+
+	//logstash-%{+YYYY.MM.dd}
+
+}
+
+func handleElasticTemplate(config FlingOutElastic) {
+	//FIXME do the thing
+
+}
+
+func createPubSubInitMsg(topicName string, channel chan FlingEvent) {
 	var logEntry map[string]interface{}
 	logEntry = make(map[string]interface{})
 	hostname, _ := os.Hostname()
@@ -249,7 +401,7 @@ func createPubSubInitMsg(topicName string, channel chan map[string]interface{}) 
 	logEntry["@timestamp"] = get3339Time()
 	logEntry["message"] = "Starting up Fling PubSub Output"
 
-	channel <- logEntry
+	channel <- FlingEvent{JSON: logEntry}
 	log.WithFields(log.Fields{"topic": topicName}).Info("PubSub Init message queued")
 }
 
@@ -271,10 +423,10 @@ func startFileWorker(file FlingInFile, outputs map[string]interface{}) {
 	log.WithFields(log.Fields{
 		"path": file.Path,
 	}).Info("Adding tail for file")
-	go fileWorker(file, outputs)
+	go fileInWorker(file, outputs)
 }
 
-func fileWorker(file FlingInFile, outputs map[string]interface{}) {
+func fileInWorker(file FlingInFile, outputs map[string]interface{}) {
 	t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: true})
 
 	if tailErr != nil {
@@ -316,7 +468,7 @@ func fileWorker(file FlingInFile, outputs map[string]interface{}) {
 
 		handleInjections(&logEntry, file.Injections)
 
-		dispatchEntry(logEntry, file.Outputs, outputs)
+		dispatchEntry(FlingEvent{UniqueID: "", JSON: logEntry}, file.Outputs, outputs)
 	}
 }
 
@@ -333,9 +485,9 @@ func handleInjections(logEntry *map[string]interface{}, injections []FlingInject
 	}
 }
 
-func dispatchEntry(eventJSON map[string]interface{}, outputs []string, channels map[string]interface{}) {
+func dispatchEntry(event FlingEvent, outputs []string, channels map[string]interface{}) {
 	for _, output := range outputs {
-		channels[output].(chan map[string]interface{}) <- eventJSON
+		channels[output].(chan FlingEvent) <- event
 	}
 }
 
