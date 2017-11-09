@@ -330,24 +330,43 @@ func handleOutPubSubs(outputs []FlingOutPubSub) map[string]interface{} {
 }
 
 func pubSubOutWorker(project string, topicName string, authfile string, channel chan FlingEvent) {
+	if project == "" {
+		log.Fatal("PubSub output project must be defined")
+		panic("Invalid Config")
+	}
+	if topicName == "" {
+		log.Fatal("PubSub output topic must be defined")
+		panic("Invalid Config")
+	}
+	if authfile == "" {
+		log.Fatal("PubSub output authfile must be defined")
+		panic("Invalid Config")
+	}
+
 	ctx := context.Background()
 	pubSubClient, err := pubsub.NewClient(ctx, project, option.WithServiceAccountFile(authfile))
 	if err != nil {
-
+		log.WithFields(log.Fields{
+			"project":   project,
+			"topic":     topicName,
+			"auth_file": authfile,
+		}).Fatal(fmt.Sprintf("Could not create pubsub Client: %v", err))
+		panic("Couldn't authenticate to pubsub")
 	}
 
 	topic := pubSubClient.Topic(topicName)
 	defer topic.Stop()
 
 	//send hello message to topic to keep track of what clients, versions etc.. are sending in data
-	createPubSubInitMsg(topicName, channel)
+	// Run this in a go routine to avoid a race condition with inputs filling the channel
+	go createPubSubInitMsg(topicName, channel)
 
 	for {
 		event := <-channel
 
 		message, marshalErr := json.Marshal(event.JSON)
 		if marshalErr != nil {
-			log.WithFields(log.Fields{}).Error("Event Marshalling for pub/sub submission failed")
+			log.Error("Event Marshalling for pub/sub submission failed")
 			return
 		}
 		result := topic.Publish(ctx, &pubsub.Message{
