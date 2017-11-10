@@ -117,11 +117,12 @@ type FlingOutLogger struct {
 
 //FlingInFile - instance of a file to monitor
 type FlingInFile struct {
-	Path       string           `json:"path"`
-	IsJSON     bool             `json:"is_json"`
-	IsGlob     bool             `json:"is_glob"`
-	Outputs    []string         `json:"outputs"`
-	Injections []FlingInjection `json:"injections"`
+	Path         string           `json:"path"`
+	IsJSON       bool             `json:"is_json"`
+	IsGlob       bool             `json:"is_glob"`
+	GlobInterval int              `json:"glob_interval"`
+	Outputs      []string         `json:"outputs"`
+	Injections   []FlingInjection `json:"injections"`
 }
 
 //FlingInjection - fields to add to the log line
@@ -432,15 +433,39 @@ func createPubSubInitMsg(topicName string, channel chan FlingEvent) {
 func handleInFiles(files []FlingInFile, outputs map[string]interface{}) {
 	for _, file := range files {
 		if file.IsGlob {
-			paths, _ := filepath.Glob(file.Path)
-			for _, path := range paths {
-				file.Path = path
-				startFileWorker(file, outputs)
-			}
+			go fileInGlobWatcher(file, outputs)
+
 		} else {
 			startFileWorker(file, outputs)
 		}
 	}
+}
+
+func fileInGlobWatcher(file FlingInFile, outputs map[string]interface{}) {
+	if file.GlobInterval == 0 {
+		file.GlobInterval = 30
+	}
+	watchedPaths := make(map[string]bool)
+	var globPattern = file.Path
+
+	for {
+		log.WithFields(log.Fields{
+			"path": globPattern,
+		}).Debug("Checking for new files in glob")
+
+		paths, _ := filepath.Glob(globPattern)
+		for _, path := range paths {
+			file.Path = path
+
+			if _, exists := watchedPaths[file.Path]; !exists {
+				watchedPaths[file.Path] = true
+				startFileWorker(file, outputs)
+			}
+		}
+
+		time.Sleep(time.Duration(file.GlobInterval) * time.Second)
+	}
+
 }
 
 func startFileWorker(file FlingInFile, outputs map[string]interface{}) {
