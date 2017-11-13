@@ -18,9 +18,10 @@ import (
 )
 
 var (
-	configFile = kingpin.Flag("config", "Configuration file").Required().Short('c').String()
-	debugFlag  = kingpin.Flag("debug", "Enable Debug Logging").Short('d').Bool()
-	version    = "master" //overridden by build system, master as default
+	configFile  = kingpin.Flag("config", "Configuration file").Required().Short('c').String()
+	debugFlag   = kingpin.Flag("debug", "Enable Debug Logging").Short('d').Bool()
+	inotifyFlag = kingpin.Flag("inotify", "Enable iNotify file monitoring").Short('i').Bool()
+	version     = "master" //overridden by build system, master as default
 )
 
 /*
@@ -476,7 +477,7 @@ func startFileWorker(file FlingInFile, outputs map[string]interface{}) {
 }
 
 func fileInWorker(file FlingInFile, outputs map[string]interface{}) {
-	t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: true})
+	t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: !*inotifyFlag})
 
 	if tailErr != nil {
 		log.WithFields(log.Fields{
