@@ -562,19 +562,21 @@ func rotateWorker(rotation FlingRotation) {
 func rotate(rotation FlingRotation) {
 	//Handle the files first
 	for _, path := range rotation.Files {
-		//FIXME add file size check
+		files, _ := filepath.Glob(path)
+		for _, file := range files {
 
-		renameErr := os.Rename(path, path+".old")
-		if renameErr != nil {
-			log.WithFields(log.Fields{
-				"path": path,
-			}).Error("Unable to move log file in rotation")
+			renameErr := os.Rename(file, file+".old")
+			if renameErr != nil {
+				log.WithFields(log.Fields{
+					"path": file,
+				}).Error("Unable to move log file in rotation")
 
-			continue
-		} else {
-			log.WithFields(log.Fields{
-				"path": path,
-			}).Info("Moved log file")
+				continue
+			} else {
+				log.WithFields(log.Fields{
+					"path": file,
+				}).Info("Moved log file")
+			}
 		}
 	}
 
