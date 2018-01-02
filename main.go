@@ -477,49 +477,65 @@ func startFileWorker(file FlingInFile, outputs map[string]interface{}) {
 }
 
 func fileInWorker(file FlingInFile, outputs map[string]interface{}) {
-	t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: !*inotifyFlag})
+	for {
 
-	if tailErr != nil {
-		log.WithFields(log.Fields{
-			"path":  file.Path,
-			"error": tailErr,
-		}).Error("Couldn't tail file")
-	}
+		t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: !*inotifyFlag, Location: &tail.SeekInfo{0, os.SEEK_END}})
 
-	for line := range t.Lines {
-		var logEntry map[string]interface{}
-
-		log.WithFields(log.Fields{
-			"path": file.Path,
-			"line": line.Text,
-		}).Debug("Processing log line")
-
-		if file.IsJSON {
-			unmarshalErr := json.Unmarshal([]byte(line.Text), &logEntry)
-			if unmarshalErr != nil {
-				log.WithFields(log.Fields{
-					"message": line.Text,
-					"error":   unmarshalErr,
-				}).Error("Couldn't parse JSON log line")
-
-				continue
-			}
+		if tailErr != nil {
+			log.WithFields(log.Fields{
+				"path":  file.Path,
+				"error": tailErr,
+			}).Error("Couldn't tail file")
 		} else {
-			logEntry = make(map[string]interface{})
-			logEntry["message"] = line.Text
+			log.Info("tailed log")
 		}
 
-		//FIXME: Inject other pertinent context info
-		logEntry["fling.source"] = file.Path
-
-		if _, ok := logEntry["@timestamp"]; !ok {
-			logEntry["@timestamp"] = get3339Time()
+	Processing:
+		for {
+			select {
+			case line := <-t.Lines:
+				processInFileLine(line, file, outputs)
+			case <-time.After(time.Hour):
+				t.Stop()
+				break Processing
+			}
 		}
-
-		handleInjections(&logEntry, file.Injections)
-
-		dispatchEntry(FlingEvent{UniqueID: "", JSON: logEntry}, file.Outputs, outputs)
 	}
+}
+
+func processInFileLine(line *tail.Line, file FlingInFile, outputs map[string]interface{}) {
+	var logEntry map[string]interface{}
+
+	log.WithFields(log.Fields{
+		"path": file.Path,
+		"line": line.Text,
+	}).Debug("Processing log line")
+
+	if file.IsJSON {
+		unmarshalErr := json.Unmarshal([]byte(line.Text), &logEntry)
+		if unmarshalErr != nil {
+			log.WithFields(log.Fields{
+				"message": line.Text,
+				"error":   unmarshalErr,
+			}).Error("Couldn't parse JSON log line")
+
+			return
+		}
+	} else {
+		logEntry = make(map[string]interface{})
+		logEntry["message"] = line.Text
+	}
+
+	//FIXME: Inject other pertinent context info
+	logEntry["fling.source"] = file.Path
+
+	if _, ok := logEntry["@timestamp"]; !ok {
+		logEntry["@timestamp"] = get3339Time()
+	}
+
+	handleInjections(&logEntry, file.Injections)
+
+	dispatchEntry(FlingEvent{UniqueID: "", JSON: logEntry}, file.Outputs, outputs)
 }
 
 func handleInjections(logEntry *map[string]interface{}, injections []FlingInjection) {
