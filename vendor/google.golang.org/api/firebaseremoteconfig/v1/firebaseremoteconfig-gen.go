@@ -1,3 +1,9 @@
+// Copyright 2018 Google Inc. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// AUTO-GENERATED CODE. DO NOT EDIT.
+
 // Package firebaseremoteconfig provides access to the Firebase Remote Config API.
 //
 // See https://firebase.google.com/docs/remote-config/
@@ -11,18 +17,18 @@ package firebaseremoteconfig // import "google.golang.org/api/firebaseremoteconf
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	context "golang.org/x/net/context"
-	ctxhttp "golang.org/x/net/context/ctxhttp"
-	gensupport "google.golang.org/api/gensupport"
-	googleapi "google.golang.org/api/googleapi"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+
+	gensupport "google.golang.org/api/gensupport"
+	googleapi "google.golang.org/api/googleapi"
 )
 
 // Always reference these packages, just in case the auto-generated code
@@ -38,7 +44,6 @@ var _ = googleapi.Version
 var _ = errors.New
 var _ = strings.Replace
 var _ = context.Canceled
-var _ = ctxhttp.Do
 
 const apiId = "firebaseremoteconfig:v1"
 const apiName = "firebaseremoteconfig"
@@ -83,7 +88,7 @@ type ProjectsService struct {
 // be
 // thought of as named "if" statements) and a map of parameters
 // (parameter key
-// to a stucture containing an optional default value, as well as a
+// to a structure containing an optional default value, as well as a
 // optional
 // submap of (condition name to value when that condition is true).
 type RemoteConfig struct {
@@ -148,8 +153,8 @@ type RemoteConfig struct {
 }
 
 func (s *RemoteConfig) MarshalJSON() ([]byte, error) {
-	type noMethod RemoteConfig
-	raw := noMethod(*s)
+	type NoMethod RemoteConfig
+	raw := NoMethod(*s)
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
 
@@ -157,6 +162,17 @@ func (s *RemoteConfig) MarshalJSON() ([]byte, error) {
 // these (because order matters) are
 // part of a single RemoteConfig template.
 type RemoteConfigCondition struct {
+	// Description: DO NOT USE. Implementation removed and will not be added
+	// unless requested.
+	// A description for this Condition. Length must be less than or equal
+	// to
+	// 100 characters (or more precisely, unicode code points, which is
+	// defined
+	// in
+	// java/com/google/wireless/android/config/ConstsExporter.java).
+	// A description may contain any Unicode characters
+	Description string `json:"description,omitempty"`
+
 	// Expression: Required.
 	Expression string `json:"expression,omitempty"`
 
@@ -197,7 +213,7 @@ type RemoteConfigCondition struct {
 	//   "TEAL" - Teal
 	TagColor string `json:"tagColor,omitempty"`
 
-	// ForceSendFields is a list of field names (e.g. "Expression") to
+	// ForceSendFields is a list of field names (e.g. "Description") to
 	// unconditionally include in API requests. By default, fields with
 	// empty values are omitted from API requests. However, any non-pointer,
 	// non-interface field appearing in ForceSendFields will be sent to the
@@ -205,18 +221,18 @@ type RemoteConfigCondition struct {
 	// used to include empty fields in Patch requests.
 	ForceSendFields []string `json:"-"`
 
-	// NullFields is a list of field names (e.g. "Expression") to include in
-	// API requests with the JSON null value. By default, fields with empty
-	// values are omitted from API requests. However, any field with an
-	// empty value appearing in NullFields will be sent to the server as
+	// NullFields is a list of field names (e.g. "Description") to include
+	// in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. However, any field with
+	// an empty value appearing in NullFields will be sent to the server as
 	// null. It is an error if a field in this list has a non-empty value.
 	// This may be used to include null fields in Patch requests.
 	NullFields []string `json:"-"`
 }
 
 func (s *RemoteConfigCondition) MarshalJSON() ([]byte, error) {
-	type noMethod RemoteConfigCondition
-	raw := noMethod(*s)
+	type NoMethod RemoteConfigCondition
+	raw := NoMethod(*s)
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
 
@@ -238,6 +254,16 @@ type RemoteConfigParameter struct {
 	// evaluate to <code>true</code>.
 	DefaultValue *RemoteConfigParameterValue `json:"defaultValue,omitempty"`
 
+	// Description: Optional.
+	// A description for this Parameter. Length must be less than or equal
+	// to
+	// 100 characters (or more precisely, unicode code points, which is
+	// defined
+	// in
+	// java/com/google/wireless/android/config/ConstsExporter.java).
+	// A description may contain any Unicode characters
+	Description string `json:"description,omitempty"`
+
 	// ForceSendFields is a list of field names (e.g. "ConditionalValues")
 	// to unconditionally include in API requests. By default, fields with
 	// empty values are omitted from API requests. However, any non-pointer,
@@ -257,8 +283,8 @@ type RemoteConfigParameter struct {
 }
 
 func (s *RemoteConfigParameter) MarshalJSON() ([]byte, error) {
-	type noMethod RemoteConfigParameter
-	raw := noMethod(*s)
+	type NoMethod RemoteConfigParameter
+	raw := NoMethod(*s)
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
 
@@ -300,8 +326,8 @@ type RemoteConfigParameterValue struct {
 }
 
 func (s *RemoteConfigParameterValue) MarshalJSON() ([]byte, error) {
-	type noMethod RemoteConfigParameterValue
-	raw := noMethod(*s)
+	type NoMethod RemoteConfigParameterValue
+	raw := NoMethod(*s)
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
 
@@ -416,7 +442,7 @@ func (c *ProjectsGetRemoteConfigCall) Do(opts ...googleapi.CallOption) (*RemoteC
 		},
 	}
 	target := &ret
-	if err := json.NewDecoder(res.Body).Decode(target); err != nil {
+	if err := gensupport.DecodeResponse(target, res); err != nil {
 		return nil, err
 	}
 	return ret, nil
@@ -592,7 +618,7 @@ func (c *ProjectsUpdateRemoteConfigCall) Do(opts ...googleapi.CallOption) (*Remo
 		},
 	}
 	target := &ret
-	if err := json.NewDecoder(res.Body).Decode(target); err != nil {
+	if err := gensupport.DecodeResponse(target, res); err != nil {
 		return nil, err
 	}
 	return ret, nil
