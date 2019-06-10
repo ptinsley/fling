@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -564,12 +565,18 @@ func handleRotations(rotations []FlingRotation) {
 }
 
 func rotateWorker(rotation FlingRotation) {
+	rand.Seed(time.Now().UnixNano())
+
 	for {
+		// add a random offset within a 10 minute window to try and prevent
+		//  thundering herd
+		interval := rotation.RotateInterval + rand.Intn(600)
+
 		log.WithFields(log.Fields{
-			"seconds": rotation.RotateInterval,
+			"seconds": interval,
 		}).Info("Sleeping before rotate")
 
-		time.Sleep(time.Duration(rotation.RotateInterval) * time.Second)
+		time.Sleep(time.Duration(interval) * time.Second)
 
 		rotate(rotation)
 	}
