@@ -56,7 +56,7 @@ type FlingInput struct {
 
 //FlingInPubSub - pub/sub input type
 type FlingInPubSub struct {
-	AuthFile     string           `json:"auth_file"`
+	AuthFile     string           `json:"auth_file,omitempty"`
 	Project      string           `json:"project"`
 	Subscription string           `json:"subscription"`
 	Outputs      []string         `json:"outputs"`
@@ -333,6 +333,8 @@ func handleOutPubSubs(outputs []FlingOutPubSub) map[string]interface{} {
 }
 
 func pubSubOutWorker(project string, topicName string, authfile string, channel chan FlingEvent) {
+	ctx := context.Background()
+
 	if project == "" {
 		log.Fatal("PubSub output project must be defined")
 		panic("Invalid Config")
@@ -341,13 +343,16 @@ func pubSubOutWorker(project string, topicName string, authfile string, channel 
 		log.Fatal("PubSub output topic must be defined")
 		panic("Invalid Config")
 	}
+
+	var pubSubClient *pubsub.Client
+	var err error
+
 	if authfile == "" {
-		log.Fatal("PubSub output authfile must be defined")
-		panic("Invalid Config")
+		pubSubClient, err = pubsub.NewClient(ctx, project)
+	} else {
+		pubSubClient, err = pubsub.NewClient(ctx, project, option.WithServiceAccountFile(authfile))
 	}
 
-	ctx := context.Background()
-	pubSubClient, err := pubsub.NewClient(ctx, project, option.WithServiceAccountFile(authfile))
 	if err != nil {
 		log.WithFields(log.Fields{
 			"project":   project,
