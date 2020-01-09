@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"cloud.google.com/go/pubsub"
@@ -575,7 +576,14 @@ func rotateWorker(rotation FlingRotation) {
 	for {
 		// add a random offset within a 10 minute window to try and prevent
 		//  thundering herd
-		interval := rotation.RotateInterval + rand.Intn(600)
+		window, err := strconv.Atoi(os.Getenv("ROTATE_WINDOW"))
+
+		if err != nil || window < 1 {
+			//use a default of 10 minutes
+			window = 600
+		}
+
+		interval := rotation.RotateInterval + rand.Intn(window)
 
 		log.WithFields(log.Fields{
 			"seconds": interval,
