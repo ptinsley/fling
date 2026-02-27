@@ -6,3 +6,4 @@ builds:
     
     goarch:
       - amd64
+      - arm64

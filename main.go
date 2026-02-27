@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -16,7 +16,7 @@ import (
 	"github.com/hpcloud/tail"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"github.com/alecthomas/kingpin/v2"
 )
 
 var (
@@ -120,12 +120,13 @@ type FlingOutLogger struct {
 
 //FlingInFile - instance of a file to monitor
 type FlingInFile struct {
-	Path         string           `json:"path"`
-	IsJSON       bool             `json:"is_json"`
-	IsGlob       bool             `json:"is_glob"`
-	GlobInterval int              `json:"glob_interval"`
-	Outputs      []string         `json:"outputs"`
-	Injections   []FlingInjection `json:"injections"`
+	Path              string           `json:"path"`
+	IsJSON            bool             `json:"is_json"`
+	IsGlob            bool             `json:"is_glob"`
+	GlobInterval      int              `json:"glob_interval"`
+	ReadFromBeginning bool             `json:"read_from_beginning"`
+	Outputs           []string         `json:"outputs"`
+	Injections        []FlingInjection `json:"injections"`
 }
 
 //FlingInjection - fields to add to the log line
@@ -175,7 +176,7 @@ func main() {
 
 func loadConfig(path string) (FlingConfig, error) {
 	var config FlingConfig
-	configString, readError := ioutil.ReadFile(path)
+	configString, readError := os.ReadFile(path)
 
 	if readError != nil {
 		return config, readError
@@ -351,7 +352,7 @@ func pubSubOutWorker(project string, topicName string, authfile string, channel 
 	if authfile == "" {
 		pubSubClient, err = pubsub.NewClient(ctx, project)
 	} else {
-		pubSubClient, err = pubsub.NewClient(ctx, project, option.WithServiceAccountFile(authfile))
+		pubSubClient, err = pubsub.NewClient(ctx, project, option.WithCredentialsFile(authfile))
 	}
 
 	if err != nil {
@@ -485,8 +486,12 @@ func startFileWorker(file FlingInFile, outputs map[string]interface{}) {
 
 func fileInWorker(file FlingInFile, outputs map[string]interface{}) {
 	for {
+		tailConfig := tail.Config{Follow: true, ReOpen: true, Poll: !*inotifyFlag}
+		if !file.ReadFromBeginning {
+			tailConfig.Location = &tail.SeekInfo{Offset: 0, Whence: io.SeekEnd}
+		}
 
-		t, tailErr := tail.TailFile(file.Path, tail.Config{Follow: true, ReOpen: true, Poll: !*inotifyFlag, Location: &tail.SeekInfo{0, os.SEEK_END}})
+		t, tailErr := tail.TailFile(file.Path, tailConfig)
 
 		if tailErr != nil {
 			log.WithFields(log.Fields{
@@ -571,8 +576,6 @@ func handleRotations(rotations []FlingRotation) {
 }
 
 func rotateWorker(rotation FlingRotation) {
-	rand.Seed(time.Now().UnixNano())
-
 	for {
 		// add a random offset within a 10 minute window to try and prevent
 		//  thundering herd

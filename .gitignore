@@ -10,8 +10,8 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
-# Project-local glide cache, RE: https://github.com/Masterminds/glide/issues/736
-.glide/
+# Vendor directory (dependencies managed by Go modules)
+vendor/
 
 .vscode
 
@@ -19,3 +19,5 @@ dist
 main
 
 test.json
+fling_test_bin
+test/config.json
