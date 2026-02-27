@@ -176,5 +176,5 @@ Fling can rotate log files on a schedule. Each rotation cycle:
 ```bash
 git tag -a vX.X.X -m 'about this version'
 git push origin vX.X.X
-goreleaser --rm-dist
+goreleaser build --clean
 ```
