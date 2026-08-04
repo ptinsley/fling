@@ -45,15 +45,29 @@ if ! command -v gcloud &>/dev/null; then
     exit 1
 fi
 
-BETA_STATE="$(gcloud components list --filter="id:beta" --format="value(state.name)" 2>/dev/null)"
-if [[ "$BETA_STATE" == "Not Installed" ]] || [[ -z "$BETA_STATE" ]]; then
-    echo "FAIL: gcloud beta component not installed. Run: gcloud components install beta"
-    exit 1
-fi
-
 EMULATOR_STATE="$(gcloud components list --filter="id:pubsub-emulator" --format="value(state.name)" 2>/dev/null)"
 if [[ "$EMULATOR_STATE" == "Not Installed" ]] || [[ -z "$EMULATOR_STATE" ]]; then
     echo "FAIL: Pub/Sub emulator not installed. Run: gcloud components install pubsub-emulator"
+    exit 1
+fi
+
+# Prefer the emulator's own launcher over "gcloud beta emulators pubsub", which
+# needs the beta component. Homebrew installs of the SDK often ship the emulator
+# without beta, and the launcher takes the same host/port.
+EMULATOR_LAUNCHER="$(gcloud info --format='value(installation.sdk_root)' 2>/dev/null)/platform/pubsub-emulator/bin/cloud-pubsub-emulator"
+if [[ ! -x "$EMULATOR_LAUNCHER" ]]; then
+    EMULATOR_LAUNCHER=""
+
+    BETA_STATE="$(gcloud components list --filter="id:beta" --format="value(state.name)" 2>/dev/null)"
+    if [[ "$BETA_STATE" == "Not Installed" ]] || [[ -z "$BETA_STATE" ]]; then
+        echo "FAIL: need either the emulator launcher or the gcloud beta component."
+        echo "      Run: gcloud components install beta"
+        exit 1
+    fi
+fi
+
+if ! command -v java &>/dev/null; then
+    echo "FAIL: java not found. The Pub/Sub emulator requires a JRE."
     exit 1
 fi
 
@@ -93,6 +107,59 @@ EOF
 cat > "${TMPDIR_PATH}/json.log" <<EOF
 {"message":"json-prepop-1","level":"info","service":"test"}
 {"message":"json-prepop-2","level":"warn","service":"test"}
+EOF
+
+# Scenario 6: mysql_error.log - a crash backtrace (one record over 5 lines)
+# followed by a separate timestamped line. Expect exactly 2 events.
+cat > "${TMPDIR_PATH}/mysql_error.log" <<'EOF'
+2026-07-28T10:23:45.123456Z 0 [ERROR] [MY-013183] [InnoDB] Assertion failure: trx0trx.cc:1234
+InnoDB: We intentionally generate a memory trap.
+Thread pointer: 0x7f8b40000f00
+Attempting backtrace. You can use the following information to find out
+/usr/sbin/mysqld(my_print_stacktrace+0x41) [0x21f0b41]
+2026-07-28T10:23:46.000000Z 0 [System] [MY-010910] [Server] Shutdown complete
+EOF
+
+# Scenario 10: mysql_slow.log - three queries. The second omits "# Time:" because
+# it landed in the same second as the first, which is why the pattern anchors on
+# "# User@Host:". Expect 4 events: the leading "# Time:" alone, then one per query.
+cat > "${TMPDIR_PATH}/mysql_slow.log" <<'EOF'
+# Time: 2026-07-28T10:23:45.123456Z
+# User@Host: app[app] @ 10.0.0.5 [10.0.0.5]  Id: 12345
+# Query_time: 2.345678  Lock_time: 0.000123 Rows_sent: 1  Rows_examined: 1000000
+SET timestamp=1785316225;
+SELECT * FROM orders WHERE customer_id = 42
+  AND created_at > '2026-01-01';
+# User@Host: app[app] @ 10.0.0.6 [10.0.0.6]  Id: 12346
+# Query_time: 1.111  Lock_time: 0.000 Rows_sent: 5  Rows_examined: 900
+SELECT COUNT(*) FROM line_items;
+# Time: 2026-07-28T10:23:47.000000Z
+# User@Host: app[app] @ 10.0.0.7 [10.0.0.7]  Id: 12347
+# Query_time: 3.5  Lock_time: 0.0 Rows_sent: 1  Rows_examined: 10
+SELECT SLEEP(3);
+EOF
+
+# Scenario 7: nginx_error.log - an entry with app stderr passthrough beneath it,
+# then a second entry. Expect exactly 2 events.
+cat > "${TMPDIR_PATH}/nginx_error.log" <<'EOF'
+2026/07/28 10:23:45 [error] 1234#0: *567 Passenger: app error, client: 10.0.0.1
+App 4242 stderr: ActiveRecord::StatementInvalid (Mysql2::Error: Lost connection)
+App 4242 stderr:   from /webapp/app/models/order.rb:88
+2026/07/28 10:23:47 [warn] 1234#0: *568 upstream server temporarily disabled
+EOF
+
+# Scenario 8: timeout.log - created empty; a lone record is appended later with
+# nothing following it, so only the idle timeout can flush it.
+touch "${TMPDIR_PATH}/timeout.log"
+
+# Scenario 9: truncate.log - max_lines is set to 3 in the config below, so the
+# record is cut short at 3 lines and the leftover line arrives in a follow-on
+# chunk that is flagged too. Expect 2 events, both marked multiline_truncated.
+cat > "${TMPDIR_PATH}/truncate.log" <<'EOF'
+2026-07-28T10:23:45.000000Z 0 [ERROR] runaway record begins
+runaway line 1
+runaway line 2
+runaway line 3
 EOF
 
 # --- Generate config.json ---
@@ -153,6 +220,82 @@ cat > "${SCRIPT_DIR}/config.json" <<EOF
         "injections": [
           {"field": "generator", "value": "scenario-5-json"}
         ]
+      },
+      {
+        "path": "${TMPDIR_PATH}/mysql_error.log",
+        "is_json": false,
+        "is_glob": false,
+        "read_from_beginning": true,
+        "outputs": ["test-output"],
+        "multiline": {
+          "start_pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}",
+          "mode": "halt_before",
+          "timeout_ms": 500
+        },
+        "injections": [
+          {"field": "generator", "value": "scenario-6-multiline-mysql-error"}
+        ]
+      },
+      {
+        "path": "${TMPDIR_PATH}/mysql_slow.log",
+        "is_json": false,
+        "is_glob": false,
+        "read_from_beginning": true,
+        "outputs": ["test-output"],
+        "multiline": {
+          "start_pattern": "^# User@Host:",
+          "mode": "halt_before",
+          "timeout_ms": 500
+        },
+        "injections": [
+          {"field": "generator", "value": "scenario-10-multiline-mysql-slow"}
+        ]
+      },
+      {
+        "path": "${TMPDIR_PATH}/nginx_error.log",
+        "is_json": false,
+        "is_glob": false,
+        "read_from_beginning": true,
+        "outputs": ["test-output"],
+        "multiline": {
+          "start_pattern": "^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} ",
+          "mode": "halt_before",
+          "timeout_ms": 500
+        },
+        "injections": [
+          {"field": "generator", "value": "scenario-7-multiline-nginx-error"}
+        ]
+      },
+      {
+        "path": "${TMPDIR_PATH}/timeout.log",
+        "is_json": false,
+        "is_glob": false,
+        "read_from_beginning": true,
+        "outputs": ["test-output"],
+        "multiline": {
+          "start_pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}",
+          "mode": "halt_before",
+          "timeout_ms": 500
+        },
+        "injections": [
+          {"field": "generator", "value": "scenario-8-multiline-timeout"}
+        ]
+      },
+      {
+        "path": "${TMPDIR_PATH}/truncate.log",
+        "is_json": false,
+        "is_glob": false,
+        "read_from_beginning": true,
+        "outputs": ["test-output"],
+        "multiline": {
+          "start_pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}",
+          "mode": "halt_before",
+          "timeout_ms": 500,
+          "max_lines": 3
+        },
+        "injections": [
+          {"field": "generator", "value": "scenario-9-multiline-truncation"}
+        ]
       }
     ]
   },
@@ -185,7 +328,11 @@ EMULATOR_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); pr
 EMULATOR_HOST="localhost:${EMULATOR_PORT}"
 echo "Emulator will listen on ${EMULATOR_HOST}"
 
-gcloud beta emulators pubsub start --project="${PROJECT_ID}" --host-port="${EMULATOR_HOST}" &>"${TMPDIR_PATH}/emulator.log" &
+if [[ -n "$EMULATOR_LAUNCHER" ]]; then
+    "$EMULATOR_LAUNCHER" --host=localhost --port="${EMULATOR_PORT}" &>"${TMPDIR_PATH}/emulator.log" &
+else
+    gcloud beta emulators pubsub start --project="${PROJECT_ID}" --host-port="${EMULATOR_HOST}" &>"${TMPDIR_PATH}/emulator.log" &
+fi
 EMULATOR_PID=$!
 echo "Emulator PID: $EMULATOR_PID"
 
@@ -268,6 +415,11 @@ echo "  Appended 1 line to glob_beginning/app.log"
 # Scenario 5: append 1 JSON line to json.log
 echo '{"message":"json-appended-1","level":"error","service":"test"}' >> "${TMPDIR_PATH}/json.log"
 echo "  Appended 1 JSON line to json.log"
+
+# Scenario 8: append a single record start with nothing after it. No later line
+# can close the record, so it only ships if the idle timeout flushes it.
+echo "2026-07-28T10:23:48.000000Z 0 [Note] lone record awaiting timeout flush" >> "${TMPDIR_PATH}/timeout.log"
+echo "  Appended 1 unterminated record to timeout.log"
 
 # Wait for fling to process and publish
 echo "Waiting for fling to process messages (10s)..."
