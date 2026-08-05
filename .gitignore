@@ -19,5 +19,3 @@ dist
 main
 
 test.json
-fling_test_bin
-test/config.json
