@@ -15,6 +15,11 @@ Do not fold a formatting sweep into a behaviour change. If `gofmt -l .` reports
 files you did not otherwise modify, format them in their own commit so the
 substantive diff stays readable.
 
+`.claude/settings.json` runs `gofmt -w` on any `.go` file after a Write or Edit,
+so this is mechanical rather than a matter of remembering. Still check
+`gofmt -l .` before committing — the hook only covers files changed through those
+tools, not ones written by a script or a `go` command.
+
 ## Tests
 
 `go test ./...` is the entire pipeline: unit tests plus end-to-end scenarios that
