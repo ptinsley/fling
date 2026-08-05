@@ -1180,7 +1180,14 @@ func handleInjections(logEntry *map[string]interface{}, injections []FlingInject
 
 func dispatchEntry(event FlingEvent, outputs []string, channels map[string]interface{}) {
 	for _, output := range outputs {
-		channels[output].(chan FlingEvent) <- event
+		ch, ok := channels[output].(chan FlingEvent)
+		if !ok {
+			log.WithFields(log.Fields{
+				"output": output,
+			}).Error("File references unknown output; dropping event")
+			continue
+		}
+		ch <- event
 	}
 }
 
