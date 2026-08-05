@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // Timestamps handed to the aggregator. Fixed so assertions on the emitted
@@ -1171,4 +1174,86 @@ func TestTimestampFor(t *testing.T) {
 	if got := timestampFor(time.Time{}); strings.HasPrefix(got, "0001-01-01") {
 		t.Errorf("timestampFor(zero) = %q, want a current timestamp", got)
 	}
+}
+
+// captureLogs redirects logrus into a buffer for the duration of the test so an
+// assertion can check what was reported.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+	previous := log.StandardLogger().Out
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	return &buf
+}
+
+// A file may name an output that no output block defines - a typo in the config
+// is enough. dispatchEntry used to assert the map value straight to a channel,
+// so the first event down that path took the whole process out. It must report
+// the bad name and keep going instead.
+//
+// Any of these subtests panicking IS the regression: that is exactly what the
+// guard exists to prevent.
+func TestDispatchEntryUnknownOutput(t *testing.T) {
+	event := FlingEvent{JSON: map[string]interface{}{"message": "hello"}}
+
+	t.Run("delivers to a known output", func(t *testing.T) {
+		channel := make(chan FlingEvent, 1)
+		dispatchEntry(event, []string{"good"}, map[string]interface{}{"good": channel})
+
+		select {
+		case got := <-channel:
+			if got.JSON["message"] != "hello" {
+				t.Errorf("delivered %v, want the dispatched event", got.JSON)
+			}
+		default:
+			t.Fatal("known output received nothing")
+		}
+	})
+
+	t.Run("drops an undefined output and says which one", func(t *testing.T) {
+		logs := captureLogs(t)
+
+		dispatchEntry(event, []string{"typo-output"}, map[string]interface{}{})
+
+		if !strings.Contains(logs.String(), "typo-output") {
+			t.Errorf("error did not name the offending output, got: %s", logs.String())
+		}
+		if !strings.Contains(logs.String(), "unknown output") {
+			t.Errorf("error did not explain the cause, got: %s", logs.String())
+		}
+	})
+
+	t.Run("a bad output does not stop the ones after it", func(t *testing.T) {
+		captureLogs(t)
+
+		channel := make(chan FlingEvent, 1)
+		// The bad name comes first: a guard that returned instead of continuing
+		// would silently cost this file its working output too.
+		dispatchEntry(event, []string{"typo-output", "good"}, map[string]interface{}{"good": channel})
+
+		select {
+		case <-channel:
+		default:
+			t.Fatal("the output listed after an undefined one received nothing")
+		}
+	})
+
+	t.Run("drops an output that is not a channel", func(t *testing.T) {
+		logs := captureLogs(t)
+
+		// Same type assertion, different failure: the key exists but holds
+		// something that cannot be published to.
+		dispatchEntry(event, []string{"wrong-type"}, map[string]interface{}{"wrong-type": "not a channel"})
+
+		if !strings.Contains(logs.String(), "wrong-type") {
+			t.Errorf("error did not name the offending output, got: %s", logs.String())
+		}
+	})
+
+	t.Run("an empty output list is a no-op", func(t *testing.T) {
+		dispatchEntry(event, nil, map[string]interface{}{})
+	})
 }

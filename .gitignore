@@ -18,6 +18,7 @@ vendor/
 dist
 main
 
+# The compiled binary, from `go build .` at the repo root
+/fling
+
 test.json
-fling_test_bin
-test/config.json
