@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"cloud.google.com/go/pubsub"
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/hpcloud/tail"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
-	"github.com/alecthomas/kingpin/v2"
 )
 
 var (
@@ -36,14 +36,14 @@ Todo:
 - add signal handler support
 */
 
-//FlingEvent - struct to hold events and any further tracking fields needed
+// FlingEvent - struct to hold events and any further tracking fields needed
 // (that won't follow the event out of fling)
 type FlingEvent struct {
 	UniqueID string
 	JSON     map[string]interface{}
 }
 
-//FlingConfig - top level structure of json config file
+// FlingConfig - top level structure of json config file
 type FlingConfig struct {
 	Input     FlingInput      `json:"input"`
 	Files     []FlingInFile   `json:"files"`
@@ -51,13 +51,13 @@ type FlingConfig struct {
 	Output    FlingOutput     `json:"output"`
 }
 
-//FlingInput - map of input type arrays
+// FlingInput - map of input type arrays
 type FlingInput struct {
 	PubSubs []FlingInPubSub `json:"pubsub"`
 	Files   []FlingInFile   `json:"files"`
 }
 
-//FlingInPubSub - pub/sub input type
+// FlingInPubSub - pub/sub input type
 type FlingInPubSub struct {
 	AuthFile     string           `json:"auth_file,omitempty"`
 	Project      string           `json:"project"`
@@ -73,7 +73,7 @@ type FlingRotation struct {
 	RotateInterval int      `json:"rotate_interval"`
 }
 
-//FlingOutput - map of output types
+// FlingOutput - map of output types
 type FlingOutput struct {
 	PubSubs    []FlingOutPubSub   `json:"pubsub"`
 	Loggers    []FlingOutLogger   `json:"logger"`
@@ -81,7 +81,7 @@ type FlingOutput struct {
 	BigQueries []FlingOutBigQuery `json:"bigquery"`
 }
 
-//FlingOutBigQuery - Big query output config
+// FlingOutBigQuery - Big query output config
 type FlingOutBigQuery struct {
 	Name         string `json:"name"`
 	ProjectID    string `json:"project_id"`
@@ -89,7 +89,7 @@ type FlingOutBigQuery struct {
 	BatchTimeout int    `json:"batch_timeout,omitempty"`
 }
 
-//FlingOutElastic - Elastic output config
+// FlingOutElastic - Elastic output config
 type FlingOutElastic struct {
 	Name     string               `json:"name"`
 	Index    string               `json:"index_pattern"`
@@ -97,7 +97,7 @@ type FlingOutElastic struct {
 	Template FlingElasticTemplate `json:"template"`
 }
 
-//FlingElasticTemplate - information on managing an elasticsearch indexing template
+// FlingElasticTemplate - information on managing an elasticsearch indexing template
 type FlingElasticTemplate struct {
 	Name      string `json:"name"`
 	Manage    bool   `json:"manage"`
@@ -105,7 +105,7 @@ type FlingElasticTemplate struct {
 	Path      string `json:"path"`
 }
 
-//FlingOutPubSub - A log output destination
+// FlingOutPubSub - A log output destination
 type FlingOutPubSub struct {
 	Name     string `json:"name"`
 	Project  string `json:"project"`
@@ -113,14 +113,14 @@ type FlingOutPubSub struct {
 	AuthFile string `json:"auth_file"`
 }
 
-//FlingOutLogger - Send messages to the logger library
-//FIXME add level and injections
+// FlingOutLogger - Send messages to the logger library
+// FIXME add level and injections
 type FlingOutLogger struct {
 	Name      string `json:"name"`
 	IsEnabled bool   `json:"is_enabled"`
 }
 
-//FlingInFile - instance of a file to monitor
+// FlingInFile - instance of a file to monitor
 type FlingInFile struct {
 	Path              string           `json:"path"`
 	IsJSON            bool             `json:"is_json"`
@@ -132,7 +132,7 @@ type FlingInFile struct {
 	Multiline         *FlingMultiline  `json:"multiline,omitempty"`
 }
 
-//FlingMultiline - joins log records that span several physical lines into one
+// FlingMultiline - joins log records that span several physical lines into one
 // event. Omit it to keep the default one-line-per-event behaviour.
 type FlingMultiline struct {
 	StartPattern     string `json:"start_pattern"`
@@ -191,7 +191,7 @@ const (
 	tailRetryInterval = 10 * time.Second
 )
 
-//FlingInjection - fields to add to the log line
+// FlingInjection - fields to add to the log line
 type FlingInjection struct {
 	Field    string `json:"field"`
 	Value    string `json:"value"`
@@ -256,7 +256,7 @@ func loadConfig(path string) (FlingConfig, error) {
 	return config, parseError
 }
 
-//validateConfig - fail at startup rather than per-line on a bad multiline block
+// validateConfig - fail at startup rather than per-line on a bad multiline block
 func validateConfig(config FlingConfig) error {
 	files := append(append([]FlingInFile{}, config.Input.Files...), config.Files...)
 
@@ -708,7 +708,7 @@ func fileInWorker(file FlingInFile, outputs map[string]interface{}) {
 	}
 }
 
-//legacyRecycleTick - the recycle deadline for a tail with no aggregator, armed
+// legacyRecycleTick - the recycle deadline for a tail with no aggregator, armed
 // fresh on every pass of the select as it always was. An aggregating tail gets nil,
 // which parks the case forever: it carries its own absolute deadline instead.
 func legacyRecycleTick(aggregator *multilineAggregator) <-chan time.Time {
@@ -719,7 +719,7 @@ func legacyRecycleTick(aggregator *multilineAggregator) <-chan time.Time {
 	return time.After(tailRecycleInterval)
 }
 
-//dispatchLine - feed one physical line through the aggregator, if there is one,
+// dispatchLine - feed one physical line through the aggregator, if there is one,
 // and dispatch whatever records completed
 func dispatchLine(line *tail.Line, aggregator *multilineAggregator, file FlingInFile, outputs map[string]interface{}) {
 	if aggregator == nil {
@@ -735,7 +735,7 @@ func dispatchLine(line *tail.Line, aggregator *multilineAggregator, file FlingIn
 	}
 }
 
-//flushPartialAndDispatch - emit a record cut short by a tail teardown, if one was
+// flushPartialAndDispatch - emit a record cut short by a tail teardown, if one was
 // still assembling
 func flushPartialAndDispatch(aggregator *multilineAggregator, file FlingInFile, outputs map[string]interface{}) {
 	if aggregator == nil {
@@ -747,7 +747,7 @@ func flushPartialAndDispatch(aggregator *multilineAggregator, file FlingInFile, 
 	}
 }
 
-//aggregatedEvent - one assembled log record, ready to become a FlingEvent
+// aggregatedEvent - one assembled log record, ready to become a FlingEvent
 type aggregatedEvent struct {
 	Text      string
 	Time      time.Time
@@ -764,7 +764,7 @@ type aggregatedEvent struct {
 	Lines int
 }
 
-//multilineAggregator - buffers physical lines until a complete record is seen.
+// multilineAggregator - buffers physical lines until a complete record is seen.
 // It performs no I/O so it can be exercised directly in tests.
 type multilineAggregator struct {
 	start    *regexp.Regexp
@@ -1076,7 +1076,7 @@ func (a *multilineAggregator) flushInterval() time.Duration {
 	return interval
 }
 
-//setLogFlag - add a flag to ECS log.flags following whichever shape the source
+// setLogFlag - add a flag to ECS log.flags following whichever shape the source
 // already uses. An is_json source emitting nested ECS carries a "log" object, and
 // writing the flat dotted key alongside it would put the same field in the
 // document twice; fling's own plain-text events have no "log" object, so they get
@@ -1091,7 +1091,7 @@ func setLogFlag(logEntry map[string]interface{}, flag string) {
 	logEntry["log.flags"] = appendLogFlag(logEntry["log.flags"], flag)
 }
 
-//appendLogFlag - add a flag to a log.flags value without discarding any the
+// appendLogFlag - add a flag to a log.flags value without discarding any the
 // application already emitted on an is_json source
 func appendLogFlag(existing interface{}, flag string) []string {
 	var flags []string
@@ -1112,7 +1112,7 @@ func appendLogFlag(existing interface{}, flag string) []string {
 	return append(flags, flag)
 }
 
-//dispatchEvent - turn one assembled record into a FlingEvent and hand it to the
+// dispatchEvent - turn one assembled record into a FlingEvent and hand it to the
 // outputs the input is wired to
 func dispatchEvent(event aggregatedEvent, file FlingInFile, outputs map[string]interface{}) {
 	var logEntry map[string]interface{}
@@ -1257,12 +1257,12 @@ func rotate(rotation FlingRotation) {
 	}
 }
 
-//Get an RFC 3339 Nano Time for use in log timestamps
+// Get an RFC 3339 Nano Time for use in log timestamps
 func get3339Time() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
-//timestampFor - stamp an event with when its first line was read rather than when
+// timestampFor - stamp an event with when its first line was read rather than when
 // it was dispatched; assembling a multi-line record can take until its flush timeout.
 func timestampFor(lineTime time.Time) string {
 	if lineTime.IsZero() {
